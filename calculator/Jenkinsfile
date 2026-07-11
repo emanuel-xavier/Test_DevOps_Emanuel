@@ -51,11 +51,15 @@ pipeline {
                     env.ARTIFACT_MODE = (daily || params.ARTIFACT_ONLY) ? 'true' : 'false'
                     echo "Artifact-only mode: ${env.ARTIFACT_MODE} (daily=${daily}, param=${params.ARTIFACT_ONLY})"
                     
-                    // Release only on main branch.
+                    def isTag = env.TAG_NAME?.trim()
                     def isMain = env.BRANCH_NAME == 'main'
-                    env.RELEASE_MODE = (isMain && (params.RELEASE || env.ARTIFACT_MODE == 'false')) ? 'true' : 'false'
-                    env.REL_VERSION = params.RELEASE_VERSION?.trim() ? params.RELEASE_VERSION.trim() : "build-${env.BUILD_NUMBER}"
-                    echo "Release mode: ${env.RELEASE_MODE} (version=${env.REL_VERSION})"
+                    env.RELEASE_MODE = (isTag || (isMain && params.RELEASE)) ? 'true' : 'false'
+                    if (isTag) {
+                        env.REL_VERSION = env.TAG_NAME
+                    } else {
+                        env.REL_VERSION = params.RELEASE_VERSION?.trim() ? params.RELEASE_VERSION.trim() : "build-${env.BUILD_NUMBER}"
+                    }
+                    echo "Release mode: ${env.RELEASE_MODE} (version=${env.REL_VERSION}, tag=${isTag ?: 'none'})"
                 }
             }
         }
@@ -114,7 +118,6 @@ pipeline {
 
         stage('GitHub Release') {
             when {
-                branch 'main'
                 expression { env.RELEASE_MODE == 'true' }
             }
             steps {
