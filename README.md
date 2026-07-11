@@ -13,6 +13,7 @@ O objetivo deste documento é registrar o caminho que segui. Vou compartilhar as
 5. [Pipelines](#5-pipelines)
 6. [Problemas encontrados e soluções](#6-problemas-encontrados-e-soluções)
 7. [Notas operacionais](#7-notas-operacionais)
+8. [Uso de IA e prompts](#8-uso-de-ia-e-prompts)
 
 ---
 
@@ -80,7 +81,7 @@ Na primeira vez que executei o pipeline, encontrei um erro de permissão. O agen
 
 ![erro de permissão do agente](assets/docker-permission-error.png)
 
-Para resolver isso, passei o GID do grupo `docker` do host em tempo de build. Isso foi necessário para que o dono do socket montado fosse o mesmo do grupo `docker`. É uma questão importante, que detalho na [seção 6.4](#64-permissão-negada-no-socket-do-docker). Aqui está como fiz:
+Para resolver isso, passei o GID do grupo `docker` do host em tempo de build. Isso foi necessário para que o dono do socket montado fosse o mesmo do grupo `docker`. É uma questão importante, que detalho na [seção 6.6](#66-permissão-negada-no-socket-do-docker). Aqui está como fiz:
 
 ```bash
 sudo docker build \
@@ -137,7 +138,7 @@ printf '%s' '<secret-do-agent1>' | sudo docker secret create agent1_secret -
 printf '%s' '<secret-do-agent2>' | sudo docker secret create agent2_secret -
 ```
 
-> Uso `printf '%s'` de propósito, sem `echo`, para não injetar um `\n` no fim do *secret*. Isso já me custou um tempo de depuração (seção 6.5).
+> Uso `printf '%s'` de propósito, sem `echo`, para não injetar um `\n` no fim do *secret*. Isso já me custou um tempo de depuração (seção 6.7).
 
 ### 4.7 Redeploy para os agentes conectarem
 
@@ -233,7 +234,25 @@ stage('GitHub Release') {
 
 Aqui estão os problemas reais que apareceram durante a montagem, na ordem em que surgiram, com a solução que apliquei em cada um.
 
-### 6.1 Docker não estava instalado no host
+### 6.1 Chave SSH em formato PuTTY (`.ppk`) não aceita pelo OpenSSH
+
+A chave que recebi para acessar o host estava no formato `.ppk` (PuTTY). O cliente `ssh` do OpenSSH não a carregava:
+
+```
+ssh -p 22 -i ~/.ssh/Test_DevOps.ppk ubuntu@54.233.140.106
+Load key "/home/emanuel/.ssh/Test_DevOps.ppk": error in libcrypto: unsupported
+ubuntu@54.233.140.106: Permission denied (publickey).
+```
+
+**Solução:** converti a chave para o formato OpenSSH (`.pem`) com o `puttygen` e ajustei a permissão do arquivo:
+
+```bash
+puttygen ~/.ssh/Test_DevOps.ppk -O private-openssh -o ~/.ssh/Test_DevOps.pem
+chmod 600 ~/.ssh/Test_DevOps.pem
+ssh -p 22 -i ~/.ssh/Test_DevOps.pem ubuntu@54.233.140.106
+```
+
+### 6.2 Docker não estava instalado no host
 
 Logo de cara o host não tinha o Docker Engine.
 
@@ -244,7 +263,7 @@ Logo de cara o host não tinha o Docker Engine.
 - https://docs.docker.com/engine/install/ubuntu/
 - https://docs.docker.com/engine/swarm/swarm-mode/
 
-### 6.2 Falha de DNS durante o `docker build`
+### 6.3 Falha de DNS durante o `docker build`
 
 O `apt-get update` dentro do build falhava porque o contêiner não resolvia nomes.
 
@@ -252,7 +271,13 @@ O `apt-get update` dentro do build falhava porque o contêiner não resolvia nom
 
 **Solução:** configurei o DNS do daemon em `/etc/docker/daemon.json` (`"dns": ["8.8.8.8"]`) e reiniciei o serviço. A resolução voltou a funcionar dentro dos contêineres de build.
 
-### 6.3 Erro de memória (OutOfMemory / Metaspace) e falta de swap
+### 6.4 Dockerfile original da toolchain estava quebrado
+
+Além da falha de DNS, o `calculator/Dockerfile` original tinha problemas próprios, independentes do ambiente: referenciava um `hello.cpp` inexistente, tinha uma sintaxe inválida de `COPY ./calculator/*` e instalava apenas o `g++`, sem os demais pré-requisitos do `calculator/README.md`.
+
+**Solução:** reescrevi o Dockerfile para instalar todos os pré-requisitos (compilador GNU C++17, GoogleTest, clang-tidy e clang-format) e compilar de fato o projeto `calculator`. O prompt que usei para essa reescrita está registrado na [seção 8](#8-uso-de-ia-e-prompts).
+
+### 6.5 Erro de memória (OutOfMemory / Metaspace) e falta de swap
 
 O host é pequeno (~900 MB) e sem swap, e a JVM do Jenkins estourava.
 
@@ -263,7 +288,7 @@ O host é pequeno (~900 MB) e sem swap, e a JVM do Jenkins estourava.
 
 ![uso de memória depois dos limites](assets/memory-usage-after-set-up-limits.png)
 
-### 6.4 Permissão negada no socket do Docker
+### 6.6 Permissão negada no socket do Docker
 
 O usuário `jenkins` do agente não conseguia usar `/var/run/docker.sock`.
 
@@ -271,7 +296,7 @@ O usuário `jenkins` do agente não conseguia usar `/var/run/docker.sock`.
 
 **Solução:** como o `docker stack deploy` **ignora `group_add`**, gravei o GID do grupo `docker` do host direto na imagem do agente, em tempo de build (`--build-arg DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)`), e adicionei o usuário `jenkins` a esse grupo. Está tudo no `jenkins/agent.Dockerfile`.
 
-### 6.5 Secrets errados para os agentes
+### 6.7 Secrets errados para os agentes
 
 Os agentes não conectavam (a autenticação JNLP era recusada) por causa de *secret* incorreto.
 
@@ -279,7 +304,7 @@ Os agentes não conectavam (a autenticação JNLP era recusada) por causa de *se
 
 **Solução:** recriei os Swarm secrets `agent1_secret`/`agent2_secret` com o *secret* exato de cada nó (Manage Jenkins → Nodes), tomando o cuidado de usar `printf '%s'` para não injetar um `\n` no fim.
 
-### 6.6 Nome/label do nó errado
+### 6.8 Nome/label do nó errado
 
 O pipeline usa `agent { label 'docker' }` e não achava executor porque os nós estavam com nome/label diferentes do esperado.
 
@@ -287,7 +312,7 @@ O pipeline usa `agent { label 'docker' }` e não achava executor porque os nós 
 
 **Solução:** padronizei o `JENKINS_AGENT_NAME` (`agent1`/`agent2`) e a label **`docker`** nos nós, casando com o `label 'docker'` do Jenkinsfile.
 
-### 6.7 Falhas de lint, formatação e testes (essas eram esperadas)
+### 6.9 Falhas de lint, formatação e testes (essas eram esperadas)
 
 Essas falhas são a demonstração do *gate* crítico da CI:
 
@@ -307,3 +332,48 @@ Algumas coisas que vale ter em mente para operar isso no dia a dia:
 - **Memória:** o host é pequeno (~900 MB), então os *heaps* da JVM ficam limitados no compose, com os limites de cgroup correspondentes.
 - **Disco:** a imagem de toolchain usa uma **tag estável por branch** (`calc-toolchain:<branch>`), então as camadas pesadas (apt + GoogleTest) ficam quentes no cache do build e só a camada de `COPY` do fonte é refeita a cada run. O bloco `post { always }` roda `docker image prune -f`, que recupera só as camadas *dangling* deixadas por esse rebuild, preservando a imagem taggeada para o cache.
 - **Isolamento:** a tag por branch separa os caches de `main` e das branches de PR. Dois runs concorrentes na *mesma* branch compartilham a tag; como cada build reconstrói a camada de `COPY` a partir do próprio workspace montado, o binário gerado é sempre o daquele checkout.
+
+---
+
+## 8. Uso de IA e prompts
+
+Para ser transparente: usei um assistente de IA (Claude) como apoio em partes da configuração — principalmente para gerar/ajustar o Docker Compose do Jenkins, reescrever o Dockerfile da toolchain e redigir explicações de problemas. Todas as saídas foram revisadas, testadas no host e ajustadas por mim antes de entrar no repositório. Abaixo os prompts que de fato usei, na forma original.
+
+### 8.1 Configuração dos agentes e do bind mount do socket
+
+Ponto de partida foi o `docker-compose.yaml` base da doc oficial do Jenkins (https://www.jenkins.io/doc/book/installing/docker/). A partir dele:
+
+```
+I already have an environment with Docker and Docker Swarm set up. The file
+jenkins.docker-compose.yaml has the base Docker Compose provided in the Jenkins docs.
+- Set up at least 2 agents
+- set up a Docker socket bind mount to run builds inside containers
+```
+
+Resultado revisado e endurecido à mão: limites de memória (seção 6.5), *secrets* do Swarm, e o GID do `docker` gravado na imagem do agente (seção 6.6).
+
+### 8.2 Reescrita do Dockerfile da toolchain
+
+Baseado no guia C++ da Docker (https://docs.docker.com/guides/cpp/), com os pré-requisitos do `calculator/README.md`:
+
+```
+Make the Dockerfile address those prerequisites
+
+## Prerequisites
+- GNU C++17 Compiler
+- Gtest Unit Test Library
+- Clang-tidy
+- Clang-format
+```
+
+Isso resolveu o Dockerfile original quebrado (seção 6.4). O primeiro build ainda falhou por DNS (seção 6.3); a correção do daemon foi feita por mim no host.
+
+### 8.3 Redação das explicações de problema
+
+Também usei a IA para consolidar diagnósticos em texto de relatório, por exemplo:
+
+```
+i need a short resume telling about that problem and the solution for a report
+```
+
+Usado para redigir os resumos da falha de DNS (seção 6.3) e da permissão do socket / GID (seção 6.6). O conteúdo técnico foi verificado contra as saídas reais dos comandos.
