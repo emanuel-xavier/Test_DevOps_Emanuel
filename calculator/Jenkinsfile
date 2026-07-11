@@ -3,6 +3,14 @@ def toolchain
 pipeline {
     agent { label 'docker' }
 
+    parameters {
+        booleanParam(
+            name: 'ARTIFACT_ONLY',
+            defaultValue: false,
+            description: 'Skip lint/tests; only build and archive the artifact.'
+        )
+    }
+
     options {
         timestamps()
         disableConcurrentBuilds()
@@ -11,14 +19,30 @@ pipeline {
     }
 
     triggers {
+        // Full CI on new commits (webhook) + poll fallback.
         githubPush()
         pollSCM('H/5 * * * *')
+        // Daily artifact regeneration (~02:xx America/Sao_Paulo). Detected as a
+        // TimerTrigger cause below -> runs the artifact-only path.
+        cron('H 2 * * *')
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
+            }
+        }
+
+        stage('Detect mode') {
+            steps {
+                script {
+                    def daily = currentBuild
+                        .getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')
+                        .size() > 0
+                    env.ARTIFACT_MODE = (daily || params.ARTIFACT_ONLY) ? 'true' : 'false'
+                    echo "Artifact-only mode: ${env.ARTIFACT_MODE} (daily=${daily}, param=${params.ARTIFACT_ONLY})"
+                }
             }
         }
 
@@ -31,6 +55,7 @@ pipeline {
         }
 
         stage('Code check (lint + format)') {
+            when { expression { env.ARTIFACT_MODE != 'true' } }
             steps {
                 script {
                     toolchain.inside {
@@ -41,6 +66,7 @@ pipeline {
         }
 
         stage('Unit tests') {
+            when { expression { env.ARTIFACT_MODE != 'true' } }
             steps {
                 script {
                     toolchain.inside {
@@ -57,7 +83,6 @@ pipeline {
                         dir('calculator') { sh 'make' }
                     }
                 }
-                // Traceability metadata beside the binary.
                 sh '''
                     printf 'build=%s\\ncommit=%s\\ndate=%s\\n' \
                         "$BUILD_NUMBER" "$GIT_COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -75,15 +100,20 @@ pipeline {
 
     post {
         always {
-            // Best-effort image cleanup; host disk is small.
             sh "docker rmi calc-toolchain:${env.BUILD_NUMBER} 2>/dev/null || true"
             cleanWs()
         }
         failure {
-            echo 'CRITICAL: CI pipeline failed. Downstream stages skipped.'
+            echo 'CRITICAL: pipeline failed. Downstream stages skipped.'
         }
         success {
-            echo 'CI pipeline passed: code checked, tests green, artifact archived.'
+            script {
+                if (env.ARTIFACT_MODE == 'true') {
+                    echo "Artifact generated and archived (build ${env.BUILD_NUMBER})."
+                } else {
+                    echo 'CI passed: code checked, tests green, artifact archived.'
+                }
+            }
         }
     }
 }
