@@ -31,9 +31,8 @@ pipeline {
         // Full CI on new commits (webhook) + poll fallback.
         githubPush()
         pollSCM('H/5 * * * *')
-        // Daily artifact regeneration (~02:xx America/Sao_Paulo). Detected as a
-        // TimerTrigger cause below -> runs the artifact-only path.
-        cron('H 2 * * *')
+        // Daily artifact regeneration (~02:xx America/Sao_Paulo), main only.
+        cron(env.BRANCH_NAME == 'main' ? 'H 2 * * *' : '')
     }
 
     stages {
@@ -64,7 +63,8 @@ pipeline {
         stage('Build toolchain image') {
             steps {
                 script {
-                    toolchain = docker.build("calc-toolchain:${env.BUILD_NUMBER}", "calculator")
+                    def tag = 'calc-toolchain:' + env.BRANCH_NAME.replaceAll(/[^A-Za-z0-9._-]/, '-').toLowerCase()
+                    toolchain = docker.build(tag, "calculator")
                 }
             }
         }
@@ -136,7 +136,7 @@ pipeline {
 
     post {
         always {
-            sh "docker rmi calc-toolchain:${env.BUILD_NUMBER} 2>/dev/null || true"
+            sh 'docker image prune -f >/dev/null 2>&1 || true'
             cleanWs()
         }
         failure {
