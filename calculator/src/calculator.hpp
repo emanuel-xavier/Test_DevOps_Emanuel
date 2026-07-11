@@ -13,5 +13,5 @@ class Calculator {
 
   inline T multiply() { return number1 * number2; }
 
-  inline T divide() { return number1 / number2; }
+  inline T divide() { return number2 == T{} ? T{} : number1 / number2; }
 };
