@@ -6,7 +6,7 @@
 
 int main()
 {
-    double number1, number2;
+    double number1 = 0.0, number2 = 0.0;
     std::cout << "Hello Calculator" << std::endl;
     std::cout << "Enter Number 1: ";
     std::cin >> number1;
