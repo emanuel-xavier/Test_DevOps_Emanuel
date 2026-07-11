@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # Create (or reuse) a GitHub Release and upload build artifacts to it.
 #
-# Uses only curl (already present in the Jenkins agent) + the GitHub REST API,
-# so no `gh` CLI or agent image rebuild is needed.
+# Uses curl + jq (both baked into the Jenkins agent image) against the GitHub
+# REST API, so no `gh` CLI is needed.
 #
 # Required environment:
 #   GITHUB_TOKEN   PAT / fine-grained token with `contents:write` on the repo.
@@ -42,13 +42,15 @@ JSON
 resp=$(curl -sS -X POST "${API}/releases" \
     -H "${AUTH}" -H "${ACCEPT}" -d "${body}")
 
-release_id=$(echo "${resp}" | sed -n 's/.*"id": *\([0-9]*\).*/\1/p' | head -n1)
+# `.id // empty` reads the top-level release id only; nested author/uploader
+# ids are never confused, and a missing key yields "" instead of "null".
+release_id=$(printf '%s' "${resp}" | jq -r '.id // empty')
 
 # Tag may already exist (re-run / already-released commit). Reuse it.
 if [ -z "${release_id}" ]; then
     echo "Create failed or tag exists; fetching existing release for ${REL_VERSION}"
     resp=$(curl -sS "${API}/releases/tags/${REL_VERSION}" -H "${AUTH}" -H "${ACCEPT}")
-    release_id=$(echo "${resp}" | sed -n 's/.*"id": *\([0-9]*\).*/\1/p' | head -n1)
+    release_id=$(printf '%s' "${resp}" | jq -r '.id // empty')
 fi
 
 if [ -z "${release_id}" ]; then
