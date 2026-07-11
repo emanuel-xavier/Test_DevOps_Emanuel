@@ -40,7 +40,7 @@ Com `agent1` e `agent2`, atendo o requisito mínimo da prova: um servidor de CI 
 | `jenkins/agent.Dockerfile` | Imagem do agente = inbound-agent + Docker CLI + buildx; usuário `jenkins` no grupo `docker` do host |
 | `calculator/Dockerfile` | Imagem da toolchain C++17 (g++, gtest, clang-tidy, clang-format) |
 | `calculator/Jenkinsfile` | **Pipeline único**: CI completa (checagem, testes e artefato), o modo só-artefato (manual sob demanda + diário) e a **GitHub Release** condicional |
-| `calculator/ci/github-release.sh` | Cria/reaproveita a Release no GitHub e sobe os artefatos via API REST (só `curl`, sem `gh` CLI) |
+| `calculator/ci/github-release.sh` | Cria/reaproveita a Release no GitHub e sobe os artefatos via API REST (`curl` + `jq`, sem `gh` CLI) |
 
 ---
 
@@ -188,7 +188,9 @@ Para o armazenamento usei o *store* nativo do Jenkins, mas ele é fácil de troc
 triggers {
     githubPush()            // CI completa a cada commit (webhook)
     pollSCM('H/5 * * * *')  // reforço por polling
-    cron('H 2 * * *')       // artefato diário (~02:xx America/Sao_Paulo)
+    // artefato diário (~02:xx America/Sao_Paulo), só na main; spec vazio nas
+    // demais branches desliga o timer no multibranch
+    cron(env.BRANCH_NAME == 'main' ? 'H 2 * * *' : '')
 }
 ```
 
@@ -205,7 +207,7 @@ Além de arquivar o binário no *store* do Jenkins, o pipeline publica uma **Rel
 
 A versão/tag vem do parâmetro `RELEASE_VERSION` quando informado; caso contrário, cai no automático `build-<BUILD_NUMBER>`.
 
-Optei por **não** usar o `gh` CLI para não mexer na imagem do agente: o `calculator/ci/github-release.sh` fala direto com a **API REST do GitHub** via `curl` (que já está no agente). O script cria a release apontando a tag para o `GIT_COMMIT` do build, reaproveita a release caso a tag já exista (idempotente em *re-runs*) e sobe `calculator/bin/calculator` + `BUILDINFO.txt` como *assets*.
+Optei por **não** usar o `gh` CLI: o `calculator/ci/github-release.sh` fala direto com a **API REST do GitHub** via `curl` e faz o *parse* das respostas com `jq` (ambos vêm na imagem do agente). O script cria a release apontando a tag para o `GIT_COMMIT` do build, reaproveita a release caso a tag já exista (idempotente em *re-runs*) e sobe `calculator/bin/calculator` + `BUILDINFO.txt` como *assets*.
 
 O token vem do `withCredentials`, reaproveitando a credencial `test-devops-gh-token` que já autentica o *checkout*, sem criar um PAT novo. O *bind* é feito só nessa etapa, então builds sem a credencial não quebram por causa dela. O token precisa de permissão **Contents: write** para publicar a release.
 
@@ -299,5 +301,5 @@ Algumas coisas que vale ter em mente para operar isso no dia a dia:
 
 - **GID do grupo docker:** o `agent.Dockerfile` recebe o GID do host via `--build-arg`. Se o `getent group docker` mostrar um GID diferente, é só reconstruir a imagem do agente.
 - **Memória:** o host é pequeno (~900 MB), então os *heaps* da JVM ficam limitados no compose, com os limites de cgroup correspondentes.
-- **Disco:** cada run constrói uma imagem de toolchain baseada em Ubuntu; os pipelines dão `docker rmi` na imagem daquele build no bloco `post { always }`. Vale rodar um `docker image prune -f` de tempos em tempos.
-- **Isolamento:** as tags por build (`:${BUILD_NUMBER}`) evitam que dois runs concorrentes nos dois agentes colidam.
+- **Disco:** a imagem de toolchain usa uma **tag estável por branch** (`calc-toolchain:<branch>`), então as camadas pesadas (apt + GoogleTest) ficam quentes no cache do build e só a camada de `COPY` do fonte é refeita a cada run. O bloco `post { always }` roda `docker image prune -f`, que recupera só as camadas *dangling* deixadas por esse rebuild, preservando a imagem taggeada para o cache.
+- **Isolamento:** a tag por branch separa os caches de `main` e das branches de PR. Dois runs concorrentes na *mesma* branch compartilham a tag; como cada build reconstrói a camada de `COPY` a partir do próprio workspace montado, o binário gerado é sempre o daquele checkout.
