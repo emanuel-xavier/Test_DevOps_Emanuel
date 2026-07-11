@@ -194,7 +194,7 @@ triggers {
 
 Qualquer falha é tratada como **crítica**: a saída não-zero derruba o build e as etapas seguintes não rodam (o bloco `post { failure {...} }` sinaliza isso). Para ligar o webhook: repositório → *Settings → Webhooks* → `http://<host>:8080/github-webhook/`.
 
-> **Sobre o estado atual do código-fonte:** a CI completa está **vermelha de propósito**. O `make check` falha (variáveis não inicializadas em `src/main.cpp`, regra `cppcoreguidelines-init-variables`) e o `make unittest` quebra (`Calculator<int>(0,0).divide()`, divisão inteira `0/0`, SIGFPE). Isso serve justamente para demonstrar o *gate* de falha crítica funcionando. É só corrigir o fonte para ver um run verde.
+> **Sobre o estado do código-fonte:** a `main` já está **corrigida** e com a CI verde (variáveis inicializadas em `src/main.cpp` e guarda de divisão por zero em `divide()`). A versão **quebrada de propósito** foi preservada na branch `fix/calculator-check-and-test-issues`: lá o `make check` falha (variáveis não inicializadas, regra `cppcoreguidelines-init-variables`) e o `make unittest` quebra (`Calculator<int>(0,0).divide()`, divisão inteira `0/0`, SIGFPE). Basta rodar a CI naquela branch para ver o *gate* de falha crítica interrompendo o build.
 
 ### 5.3 GitHub Release
 
@@ -289,7 +289,7 @@ Essas falhas são a demonstração do *gate* crítico da CI:
 ![aviso de clang-format](assets/clang-format-warning.png)
 ![testes unitários falharam](assets/unittests-failed.png)
 
-**Sobre a "solução":** aqui não há o que corrigir na infra, são falhas **de propósito** no fonte atual (ver o aviso na seção 5.2). O pipeline as trata como críticas e interrompe a execução, que é exatamente a evidência de que os *gates* estão funcionando.
+**Sobre a "solução":** aqui não há o que corrigir na infra, são falhas **de propósito** no fonte (ver o aviso na seção 5.2). A `main` já foi corrigida; essa versão quebrada segue na branch `fix/calculator-check-and-test-issues` para servir de evidência. O pipeline trata as falhas como críticas e interrompe a execução, que é exatamente a prova de que os *gates* estão funcionando.
 
 ---
 
