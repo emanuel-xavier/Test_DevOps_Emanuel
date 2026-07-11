@@ -146,7 +146,7 @@ sudo docker stack deploy -c jenkins/docker-compose.yaml jenkins
 
 ### 4.8 Criar o job de Pipeline
 
-Deixei um único job do tipo *Pipeline*/*Multibranch* apontando para este repositório, com *Script Path* = `calculator/Jenkinsfile`. O mesmo job cobre a CI e a geração de artefato, quem decide o comportamento é o gatilho/parâmetro (explico na [seção 5](#5-pipelines)).
+Deixei um único job do tipo *Multibranch Pipeline* apontando para este repositório. Ele descobre as branches sozinho e usa o critério de marcador `**/Jenkinsfile*`, que encontra o `calculator/Jenkinsfile` automaticamente, sem precisar apontar o *Script Path* na mão. O mesmo job cobre a CI e a geração de artefato; quem decide o comportamento é o gatilho/parâmetro (explico na [seção 5](#5-pipelines)).
 
 ---
 
