@@ -21,9 +21,12 @@ https://download.docker.com/linux/debian $(. /etc/os-release && echo \"$VERSION_
     && rm -rf /var/lib/apt/lists/*
 
 # Swarm stack deploy does NOT support `group_add`, so bake socket access in:
-# create a group matching the host docker GID (986) and add the jenkins user.
-# Change 986 if the host's `getent group docker` GID differs.
-RUN groupadd -g 986 docker || groupmod -g 986 $(getent group 986 | cut -d: -f1) \
+# create a group matching the host docker GID and add the jenkins user.
+# Pass the real host GID at build time so this never drifts:
+#   docker build --build-arg DOCKER_GID=$(stat -c '%g' /var/run/docker.sock) ...
+# 986 is only a fallback default.
+ARG DOCKER_GID=986
+RUN groupadd -g ${DOCKER_GID} docker || groupmod -g ${DOCKER_GID} $(getent group ${DOCKER_GID} | cut -d: -f1) \
     && usermod -aG docker jenkins
 
 USER jenkins
