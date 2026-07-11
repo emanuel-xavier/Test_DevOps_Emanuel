@@ -39,7 +39,8 @@ Com `agent1` e `agent2`, atendo o requisito mínimo da prova: um servidor de CI 
 | `jenkins/docker-compose.yaml` | Stack do Swarm: controlador + 2 agentes, limites de recurso, *secrets* e a montagem do socket |
 | `jenkins/agent.Dockerfile` | Imagem do agente = inbound-agent + Docker CLI + buildx; usuário `jenkins` no grupo `docker` do host |
 | `calculator/Dockerfile` | Imagem da toolchain C++17 (g++, gtest, clang-tidy, clang-format) |
-| `calculator/Jenkinsfile` | **Pipeline único**: CI completa (checagem, testes e artefato) e, por condição, o modo só-artefato (manual sob demanda + diário) |
+| `calculator/Jenkinsfile` | **Pipeline único**: CI completa (checagem, testes e artefato), o modo só-artefato (manual sob demanda + diário) e a **GitHub Release** condicional |
+| `calculator/ci/github-release.sh` | Cria/reaproveita a Release no GitHub e sobe os artefatos via API REST (só `curl`, sem `gh` CLI) |
 
 ---
 
@@ -171,6 +172,7 @@ Optei por deixar **um único** `calculator/Jenkinsfile` para simplificar: um só
 | `Unit tests` | só CI completa | `make unittest` (GoogleTest) |
 | `Build artifact` | sempre | `make` → `calculator/bin/calculator` (+ `BUILDINFO.txt`) |
 | `Archive artifact` | sempre | `archiveArtifacts` (store nativo do Jenkins) |
+| `GitHub Release` | manual (`RELEASE`) ou merge na `main` | cria a Release no GitHub e anexa os binários (`calculator/ci/github-release.sh`) |
 
 No Blue Ocean dá para ver bem essa separação de etapas:
 
@@ -193,6 +195,31 @@ triggers {
 Qualquer falha é tratada como **crítica**: a saída não-zero derruba o build e as etapas seguintes não rodam (o bloco `post { failure {...} }` sinaliza isso). Para ligar o webhook: repositório → *Settings → Webhooks* → `http://<host>:8080/github-webhook/`.
 
 > **Sobre o estado atual do código-fonte:** a CI completa está **vermelha de propósito**. O `make check` falha (variáveis não inicializadas em `src/main.cpp`, regra `cppcoreguidelines-init-variables`) e o `make unittest` quebra (`Calculator<int>(0,0).divide()`, divisão inteira `0/0`, SIGFPE). Isso serve justamente para demonstrar o *gate* de falha crítica funcionando. É só corrigir o fonte para ver um run verde.
+
+### 5.3 GitHub Release
+
+Além de arquivar o binário no *store* do Jenkins, o pipeline publica uma **Release no GitHub** com os artefatos anexados. A etapa `GitHub Release` roda no fim, depois do `Archive artifact`, e só entra quando `RELEASE_MODE = true`. A etapa `Detect mode` liga esse modo em dois casos:
+
+- **Ação manual:** parâmetro `RELEASE = true` num *Build with Parameters* (opcionalmente com `RELEASE_VERSION` para nomear a tag).
+- **Merge na `main`:** todo build normal de CI (não-diário, não só-artefato). Na prática, cada PR mergeado na `main` gera uma release.
+
+A versão/tag vem do parâmetro `RELEASE_VERSION` quando informado; caso contrário, cai no automático `build-<BUILD_NUMBER>`.
+
+Optei por **não** usar o `gh` CLI para não mexer na imagem do agente: o `calculator/ci/github-release.sh` fala direto com a **API REST do GitHub** via `curl` (que já está no agente). O script cria a release apontando a tag para o `GIT_COMMIT` do build, reaproveita a release caso a tag já exista (idempotente em *re-runs*) e sobe `calculator/bin/calculator` + `BUILDINFO.txt` como *assets*.
+
+O token vem do `withCredentials`, reaproveitando a credencial `test-devops-gh-token` que já autentica o *checkout*, sem criar um PAT novo. O *bind* é feito só nessa etapa, então builds sem a credencial não quebram por causa dela. O token precisa de permissão **Contents: write** para publicar a release.
+
+```groovy
+stage('GitHub Release') {
+    when { expression { env.RELEASE_MODE == 'true' } }
+    steps {
+        withCredentials([usernamePassword(credentialsId: 'test-devops-gh-token',
+                usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+            sh 'sh calculator/ci/github-release.sh'
+        }
+    }
+}
+```
 
 ---
 
