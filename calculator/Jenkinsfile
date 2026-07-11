@@ -1,0 +1,89 @@
+def toolchain
+
+pipeline {
+    agent { label 'docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+    }
+
+    triggers {
+        githubPush()
+        pollSCM('H/5 * * * *')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build toolchain image') {
+            steps {
+                script {
+                    toolchain = docker.build("calc-toolchain:${env.BUILD_NUMBER}", "calculator")
+                }
+            }
+        }
+
+        stage('Code check (lint + format)') {
+            steps {
+                script {
+                    toolchain.inside {
+                        dir('calculator') { sh 'make check' }
+                    }
+                }
+            }
+        }
+
+        stage('Unit tests') {
+            steps {
+                script {
+                    toolchain.inside {
+                        dir('calculator') { sh 'make unittest' }
+                    }
+                }
+            }
+        }
+
+        stage('Build artifact') {
+            steps {
+                script {
+                    toolchain.inside {
+                        dir('calculator') { sh 'make' }
+                    }
+                }
+                // Traceability metadata beside the binary.
+                sh '''
+                    printf 'build=%s\\ncommit=%s\\ndate=%s\\n' \
+                        "$BUILD_NUMBER" "$GIT_COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                        > calculator/bin/BUILDINFO.txt
+                '''
+            }
+        }
+
+        stage('Archive artifact') {
+            steps {
+                archiveArtifacts artifacts: 'calculator/bin/**', fingerprint: true
+            }
+        }
+    }
+
+    post {
+        always {
+            // Best-effort image cleanup; host disk is small.
+            sh "docker rmi calc-toolchain:${env.BUILD_NUMBER} 2>/dev/null || true"
+            cleanWs()
+        }
+        failure {
+            echo 'CRITICAL: CI pipeline failed. Downstream stages skipped.'
+        }
+        success {
+            echo 'CI pipeline passed: code checked, tests green, artifact archived.'
+        }
+    }
+}
